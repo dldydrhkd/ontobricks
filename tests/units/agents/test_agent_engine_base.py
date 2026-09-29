@@ -94,6 +94,46 @@ class TestCallServingEndpoint:
         assert "//serving" not in url
 
 
+class TestThinkingDisabled:
+    @pytest.fixture(autouse=True)
+    def _reset_bans(self):
+        from agents import engine_base
+
+        engine_base._UNSUPPORTED_PARAMS.clear()
+        yield
+        engine_base._UNSUPPORTED_PARAMS.clear()
+
+    @staticmethod
+    def _ok():
+        resp = MagicMock()
+        resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+        return resp
+
+    @patch("agents.engine_base.call_llm_with_retry")
+    def test_claude_endpoint_disables_thinking(self, mock_retry):
+        mock_retry.return_value = self._ok()
+        call_serving_endpoint("https://h", "tok", "databricks-claude-opus-5", [])
+        assert mock_retry.call_args[0][2]["thinking"] == {"type": "disabled"}
+
+    @patch("agents.engine_base.call_llm_with_retry")
+    def test_non_claude_endpoint_omits_thinking(self, mock_retry):
+        mock_retry.return_value = self._ok()
+        call_serving_endpoint("https://h", "tok", "databricks-llama-4", [])
+        assert "thinking" not in mock_retry.call_args[0][2]
+
+    @patch("agents.engine_base.call_llm_with_retry")
+    def test_rejected_thinking_is_dropped_and_retried(self, mock_retry):
+        import requests
+
+        bad = MagicMock(status_code=400, text='{"message":"thinking: Extra inputs are not permitted"}')
+        mock_retry.side_effect = [
+            requests.exceptions.HTTPError("400", response=bad),
+            self._ok(),
+        ]
+        call_serving_endpoint("https://h", "tok", "claude-legacy", [])
+        assert "thinking" not in mock_retry.call_args[0][2]
+
+
 class TestDispatchTool:
     def test_known_tool(self):
         ctx = MagicMock()

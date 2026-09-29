@@ -35,6 +35,10 @@ logger = get_logger(__name__)
 
 MAX_ITERATIONS = 60
 LLM_TIMEOUT = 180
+# A submit_entity_mapping call carries the full SELECT plus the attribute →
+# column map; for a wide class (30+ attributes) that exceeds 2048 tokens, the
+# tool-call JSON is cut off and the arguments decode to nothing.
+_MAX_TOKENS = 8192
 _ITERATION_DELAY_SEC = 3
 
 _TRACE_NAME = "auto_assignment"
@@ -289,7 +293,7 @@ def run_agent(
                 endpoint_name,
                 messages,
                 tools=send_tools,
-                max_tokens=2048,
+                max_tokens=_MAX_TOKENS,
                 temperature=0.1,
                 timeout=LLM_TIMEOUT,
                 trace_name=_TRACE_NAME,
@@ -363,7 +367,30 @@ def run_agent(
                 try:
                     arguments = json.loads(raw_args)
                 except json.JSONDecodeError:
-                    arguments = {}
+                    arguments = None
+
+                if arguments is None:
+                    logger.warning(
+                        "Iteration %d: tool '%s' arguments are not valid JSON "
+                        "(finish_reason=%s, %d chars) — reporting truncation",
+                        iteration + 1,
+                        tool_name,
+                        finish_reason,
+                        len(raw_args or ""),
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "content": json.dumps({
+                            "error": (
+                                "Your tool-call arguments were cut off before the "
+                                "JSON closed, so nothing was recorded. Call the "
+                                "tool again with a shorter payload: one mapping "
+                                "per call, no LIMIT clause, no comments in SQL."
+                            )
+                        }),
+                    })
+                    continue
 
                 logger.info(
                     "Iteration %d: calling tool '%s' (%d/%d)",

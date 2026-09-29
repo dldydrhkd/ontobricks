@@ -1,0 +1,115 @@
+## Stop Lakebase control-plane routes from freezing the server
+
+Context: On a workspace without Lakebase, opening Settings triggered
+GET /settings/graph-engine/lakebase-projects. The async route called the
+synchronous Databricks Postgres API directly on the event loop; the API hung
+until the SDK's 5-minute retry timeout, so every other request (including
+/health) stalled and the UI became unreachable.
+
+Changes:
+
+1. src/api/routers/internal/settings.py
+   Wrap all 11 /graph-engine/lakebase-* handlers (health, projects, branches,
+   pg-databases, pg-schemas, objects, sync-objects, drop-object, pg-roles,
+   grant-superuser, provision) in `await run_blocking(...)` so slow
+   control-plane calls run in the thread pool instead of blocking the loop
+   (.coding_rules §5 async discipline).
+2. src/back/objects/domain/SettingsService.py
+   `graph_engine_lakebase_projects_result` returns an empty project list with
+   an explanatory message in local Postgres mode (PGPASSWORD set) without
+   calling the Postgres API.
+3. tests/units/settings/test_lakebase_projects.py
+   Clear PGPASSWORD in the pagination test; add a test asserting local
+   Postgres mode never builds a WorkspaceClient.
+
+Modified files:
+- src/api/routers/internal/settings.py
+- src/back/objects/domain/SettingsService.py
+- tests/units/settings/test_lakebase_projects.py
+
+Tests: uv run --frozen pytest -q -m "not scenario" → 5856 passed, 315 skipped,
+6 deselected, 32 warnings in 24.07s
+Manual: /settings/graph-engine/lakebase-projects → 200 in 0.008s; while a slow
+lakebase-branches call was in flight, GET / answered in 0.30s.
+
+## Make ontology generation work on databricks-claude-opus-5
+
+### Context
+Running the ontology wizard against `databricks-claude-opus-5` failed on
+every iteration: the endpoint enables extended thinking by default, so
+reasoning blocks consumed the whole `max_tokens` budget and completions ended
+with `finish_reason=length` and 0 text characters. Once thinking was off, a
+10-table schema (one table with 227 columns) still overflowed the hard-coded
+8192-token output budget, even though this endpoint accepts 32000.
+
+### Changes
+1. `src/agents/engine_base.py` — send `thinking: {"type": "disabled"}` to
+   Claude endpoints; if an endpoint rejects it ("Extra inputs are not
+   permitted"), strip it, cache the ban per endpoint and retry once (same
+   mechanism already used for `temperature`).
+2. `src/agents/agent_owl_generator/engine.py` — output-token budget is now
+   configurable via `ONTOBRICKS_OWL_MAX_TOKENS` (default 8192); the per-call
+   timeout scales proportionally.
+3. `tests/units/agents/test_agent_engine_base.py` — tests for thinking on
+   Claude endpoints, omission on other endpoints, and drop-and-retry on 400.
+4. `.env.example` — documents `ONTOBRICKS_OWL_MAX_TOKENS`.
+
+### Modified files
+- src/agents/engine_base.py
+- src/agents/agent_owl_generator/engine.py
+- tests/units/agents/test_agent_engine_base.py
+- .env.example
+
+### Test result
+`uv run --frozen pytest -q -m "not scenario"` — 5859 passed, 315 skipped.
+
+## Stop prose-prefixed ontology answers from skipping quality gates
+
+### Context
+`databricks-claude-opus-5` answered "No documents available; schemas are
+complete." followed by the Turtle. The `@prefix` gate in the OWL generator
+loop then skipped the class-cap guard, the pitfall fix loop and the Stage-1
+evaluator, while the final-accept branch still took the text — so the
+ontology was saved unchecked (`iteration_summary=[]`, `generation_score=null`).
+
+### Changes
+1. `src/agents/agent_owl_generator/engine.py` — new `_strip_turtle_preamble`
+   removes leading prose / an opening code fence (and the matching trailing
+   fence) before `@prefix`; applied to every text answer so the gates run on
+   the Turtle itself. Answers without a preamble are left byte-identical.
+2. `tests/units/agents/test_agent_owl_generator_preamble.py` — unit tests for
+   prose, code fences, clean Turtle, prose-only and inline `@prefix` mentions.
+
+### Modified files
+- src/agents/agent_owl_generator/engine.py
+- tests/units/agents/test_agent_owl_generator_preamble.py (new)
+
+### Test result
+`uv run --frozen pytest -q -m "not scenario"` — 5875 passed, 304 skipped
+(the `pitfalls` extra is now installed locally, un-skipping 11 tests).
+
+## Auto-map: stop silently dropping truncated tool calls
+
+### Context
+Auto-Map on a 12-class ontology logged
+"tool_submit_entity_mapping: missing required fields" repeatedly. The agent
+called the LLM with `max_tokens=2048`; a wide entity (31 attributes, full
+SELECT + attribute map) overflowed it, the tool-call JSON was cut off, the
+engine replaced the undecodable arguments with `{}`, and the model only saw
+"class_uri and sql_query are required" — so it resent the same oversized call.
+
+### Changes
+1. `src/agents/agent_auto_assignment/engine.py` — output budget raised to
+   `_MAX_TOKENS = 8192`; tool calls whose arguments are not valid JSON are no
+   longer dispatched with `{}`: the model gets an explicit "arguments were cut
+   off" tool error and a WARNING is logged with `finish_reason`.
+2. `tests/units/agents/test_agent_auto_assignment_truncated_args.py` — new
+   tests: truncated arguments are not dispatched, the model is told the call
+   was cut off, and the budget fits wide entity payloads.
+
+### Modified files
+- src/agents/agent_auto_assignment/engine.py
+- tests/units/agents/test_agent_auto_assignment_truncated_args.py (new)
+
+### Test result
+`uv run --frozen pytest -q -m "not scenario"` — 5878 passed, 304 skipped.

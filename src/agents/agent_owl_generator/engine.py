@@ -10,6 +10,7 @@ engine transparently degrades to a single-shot generation (no tool calls).
 """
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -51,7 +52,14 @@ MAX_OWL_EVAL_ROUNDS = 2
 # Exhaustive per-class datatype-property coverage (see # ATTRIBUTE COVERAGE)
 # makes Turtle large; 8192 is the platform ceiling — the truncation guard
 # below retries with a conciseness hint when finish_reason == "length".
-_GEN_MAX_TOKENS = 8192
+# Newer endpoints (e.g. databricks-claude-opus-5) accept a larger budget:
+# raise it with ONTOBRICKS_OWL_MAX_TOKENS. The per-call timeout grows in
+# proportion so a longer completion is not cut by the HTTP timeout.
+_DEFAULT_GEN_MAX_TOKENS = 8192
+_GEN_MAX_TOKENS = int(
+    os.environ.get("ONTOBRICKS_OWL_MAX_TOKENS") or _DEFAULT_GEN_MAX_TOKENS
+)
+_GEN_TIMEOUT = int(LLM_TIMEOUT * max(1.0, _GEN_MAX_TOKENS / _DEFAULT_GEN_MAX_TOKENS))
 
 _TRACE_NAME = "owl_generator"
 
@@ -75,6 +83,24 @@ _OWL_CLASS_DECL_RE = re.compile(r"(?:\ba|\brdf:type)\s+owl:Class\b")
 def _count_owl_classes(turtle: str) -> int:
     """Count owl:Class declarations in a Turtle string (declaration-only)."""
     return len(_OWL_CLASS_DECL_RE.findall(turtle or ""))
+
+
+_FIRST_PREFIX_RE = re.compile(r"^[ \t]*@prefix\b", re.MULTILINE)
+_TRAILING_FENCE_RE = re.compile(r"\n[ \t]*```[ \t]*\Z")
+
+
+def _strip_turtle_preamble(content: str) -> str:
+    """Drop prose / an opening code fence the model put before ``@prefix``.
+
+    Models sometimes prepend a status line ("No documents available; …")
+    to the Turtle. Without this, the ``@prefix`` gate skips the class-cap,
+    pitfall and evaluator stages and the answer is accepted unchecked.
+    """
+    text = content or ""
+    match = _FIRST_PREFIX_RE.search(text)
+    if match is None or not text[: match.start()].strip():
+        return text
+    return _TRAILING_FENCE_RE.sub("", text[match.start():].lstrip()).rstrip()
 
 
 # =====================================================
@@ -626,7 +652,7 @@ def run_agent(
                 tools=send_tools,
                 max_tokens=_GEN_MAX_TOKENS,
                 temperature=0.1,
-                timeout=LLM_TIMEOUT,
+                timeout=_GEN_TIMEOUT,
                 trace_name=_TRACE_NAME,
             )
         except requests.exceptions.HTTPError as exc:
@@ -658,7 +684,7 @@ def run_agent(
                         tools=None,
                         max_tokens=_GEN_MAX_TOKENS,
                         temperature=0.1,
-                        timeout=LLM_TIMEOUT,
+                        timeout=_GEN_TIMEOUT,
                         trace_name=_TRACE_NAME,
                     )
                 except Exception as inner:
@@ -810,7 +836,7 @@ def run_agent(
             )
         else:
             # ---- Agent produced a text response ----
-            content = extract_message_content(llm_response)
+            content = _strip_turtle_preamble(extract_message_content(llm_response))
             starts_with_prefix = content.strip().startswith("@prefix")
             logger.info(
                 "Iteration %d: agent produced text output — %d chars, starts_with_@prefix=%s",

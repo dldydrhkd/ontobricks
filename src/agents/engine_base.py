@@ -36,8 +36,20 @@ def _unsupported_params(endpoint_name: str) -> set:
 def _looks_unsupported(body_text: str, param: str) -> bool:
     low = (body_text or "").lower()
     return f"does not support the {param} parameter" in low or (
-        "unsupported" in low and param in low
+        ("unsupported" in low or "extra inputs are not permitted" in low)
+        and param in low
     )
+
+
+# Claude endpoints (e.g. databricks-claude-opus-5) enable extended thinking by
+# default. Reasoning blocks then consume the whole ``max_tokens`` budget and
+# the completion ends with ``finish_reason=length`` and zero text characters.
+# Agents rely on the text answer (Turtle, JSON), so thinking is disabled.
+_THINKING_DISABLED = {"type": "disabled"}
+
+
+def _wants_thinking_disabled(endpoint_name: str) -> bool:
+    return "claude" in (endpoint_name or "").lower()
 
 
 # =====================================================
@@ -94,6 +106,8 @@ def call_serving_endpoint(
     }
     if "temperature" not in banned and temperature is not None:
         payload["temperature"] = temperature
+    if "thinking" not in banned and _wants_thinking_disabled(endpoint_name):
+        payload["thinking"] = _THINKING_DISABLED
     if tools:
         payload["tools"] = tools
 
@@ -118,7 +132,7 @@ def call_serving_endpoint(
         body_text = response.text if response is not None else ""
         # Detect and strip parameters the model rejects, then retry once.
         dropped: List[str] = []
-        for param in ("temperature",):
+        for param in ("temperature", "thinking"):
             if param in payload and _looks_unsupported(body_text, param):
                 banned.add(param)
                 payload.pop(param, None)
