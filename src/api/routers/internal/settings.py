@@ -1030,7 +1030,7 @@ async def get_graph_engine_lakebase_health(
 ):
     """Probe Lakebase connectivity and graph schema (saved global config)."""
     with map_route_errors("graph engine Lakebase health", logger):
-        return config_service.graph_engine_lakebase_health_result(session_mgr, settings)
+        return await run_blocking(config_service.graph_engine_lakebase_health_result, session_mgr, settings)
 
 
 @router.post("/graph-engine/neo4j-test")
@@ -1192,7 +1192,7 @@ async def get_graph_engine_lakebase_projects(
 ):
     """List Lakebase Autoscaling projects visible in the workspace."""
     with map_route_errors("graph engine Lakebase projects", logger):
-        return config_service.graph_engine_lakebase_projects_result(session_mgr, settings)
+        return await run_blocking(config_service.graph_engine_lakebase_projects_result, session_mgr, settings)
 
 
 @router.get("/graph-engine/lakebase-branches")
@@ -1203,7 +1203,8 @@ async def get_graph_engine_lakebase_branches(
 ):
     """List branches for a Lakebase Autoscaling project."""
     with map_route_errors("graph engine Lakebase branches", logger):
-        return config_service.graph_engine_lakebase_branches_result(
+        return await run_blocking(
+            config_service.graph_engine_lakebase_branches_result,
             project, session_mgr, settings
         )
 
@@ -1216,7 +1217,8 @@ async def get_graph_engine_lakebase_pg_databases(
 ):
     """List Postgres databases on a Lakebase branch."""
     with map_route_errors("graph engine Lakebase PG databases", logger):
-        return config_service.graph_engine_lakebase_pg_databases_result(
+        return await run_blocking(
+            config_service.graph_engine_lakebase_pg_databases_result,
             branch, session_mgr, settings
         )
 
@@ -1230,7 +1232,8 @@ async def get_graph_engine_lakebase_pg_schemas(
 ):
     """List Postgres schemas in a Lakebase database."""
     with map_route_errors("graph engine Lakebase PG schemas", logger):
-        return config_service.graph_engine_lakebase_pg_schemas_result(
+        return await run_blocking(
+            config_service.graph_engine_lakebase_pg_schemas_result,
             database, session_mgr, settings, branch_path=branch_path
         )
 
@@ -1249,7 +1252,8 @@ async def get_graph_engine_lakebase_objects(
     that branch directly rather than the saved/bound config.
     """
     with map_route_errors("graph engine Lakebase objects", logger):
-        return config_service.graph_engine_lakebase_objects_result(
+        return await run_blocking(
+            config_service.graph_engine_lakebase_objects_result,
             database, branch_path, session_mgr, settings
         )
 
@@ -1268,7 +1272,8 @@ async def get_graph_engine_lakebase_sync_objects(
     state + pipeline_id for each entry.
     """
     with map_route_errors("graph engine Lakebase sync objects", logger):
-        return config_service.graph_engine_lakebase_sync_objects_result(
+        return await run_blocking(
+            config_service.graph_engine_lakebase_sync_objects_result,
             database, branch_path, session_mgr, settings
         )
 
@@ -1301,7 +1306,8 @@ async def post_graph_engine_lakebase_drop_object(
     """Drop a Postgres schema, table or view in the connected Lakebase database (admin only)."""
     data = await request.json()
     with map_route_errors("graph engine Lakebase drop object", logger):
-        return config_service.graph_engine_lakebase_drop_object_result(
+        return await run_blocking(
+            config_service.graph_engine_lakebase_drop_object_result,
             kind=data.get("kind", ""),
             schema=data.get("schema", ""),
             name=data.get("name", ""),
@@ -1322,7 +1328,7 @@ async def get_graph_engine_lakebase_pg_roles(
 ):
     """List Postgres roles on the graph Lakebase branch + overlay app-user status (admin only)."""
     with map_route_errors("graph engine Lakebase pg roles", logger):
-        return config_service.graph_engine_lakebase_pg_roles_result(session_mgr, settings)
+        return await run_blocking(config_service.graph_engine_lakebase_pg_roles_result, session_mgr, settings)
 
 
 @router.post(
@@ -1341,7 +1347,8 @@ async def post_graph_engine_lakebase_grant_superuser(
     with map_route_errors("graph engine Lakebase grant superuser", logger):
         data = await request.json()
         user_email = (data.get("user_email") or "").strip()
-        return config_service.graph_engine_lakebase_grant_superuser_result(
+        return await run_blocking(
+            config_service.graph_engine_lakebase_grant_superuser_result,
             user_email, session_mgr, settings
         )
 
@@ -1367,7 +1374,8 @@ async def post_graph_engine_lakebase_provision(
     data = await request.json()
     email, _dn, user_token, _ur, _udr = _settings_request_identity(request)
     with map_route_errors("provision Lakebase graph DB", logger):
-        return config_service.graph_engine_lakebase_provision_result(
+        return await run_blocking(
+            config_service.graph_engine_lakebase_provision_result,
             data, email, user_token, session_mgr, settings
         )
 

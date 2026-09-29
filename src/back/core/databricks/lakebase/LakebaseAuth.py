@@ -39,6 +39,13 @@ project.
 
 Tokens are valid for ~1 h, so :class:`LakebaseAuth` refreshes them
 ~5 minutes before expiry.
+
+**Local Postgres (dev only).** When ``PGPASSWORD`` is set, it is used
+verbatim as the password: no JWT is minted and no Postgres API lookup
+runs (:attr:`LakebaseAuth.instance_name` returns ``""``). ``PGSSLMODE``
+overrides the default ``sslmode=require`` — set it to ``disable`` for a
+plain Docker Postgres. Databricks Apps never injects ``PGPASSWORD``, so
+deployed apps keep the JWT path.
 """
 
 from __future__ import annotations
@@ -139,6 +146,15 @@ class LakebaseAuth:
         return user
 
     @property
+    def static_password(self) -> str:
+        """Return ``PGPASSWORD`` (local Postgres mode) or ``""`` for Lakebase."""
+        return os.environ.get("PGPASSWORD", "")
+
+    @property
+    def sslmode(self) -> str:
+        return os.environ.get("PGSSLMODE", "") or "require"
+
+    @property
     def branch_name(self) -> str:
         """Return the branch name extracted from the resolved endpoint resource path.
 
@@ -224,6 +240,8 @@ class LakebaseAuth:
         """
         if self._instance_name:
             return self._instance_name
+        if self.static_password:
+            return ""
 
         host = self.host.strip().lower()
         try:
@@ -392,7 +410,12 @@ class LakebaseAuth:
         distinct from the plain workspace bearer token, which Lakebase
         rejects with ``Provided authentication token is not a valid
         JWT encoding``.
+
+        Returns ``PGPASSWORD`` unchanged when set (local Postgres mode).
         """
+        if self.static_password:
+            return self.static_password
+
         now = time.time()
         if self._token and (now - self._token_ts) < _TOKEN_TTL_S:
             return self._token
@@ -467,7 +490,7 @@ class LakebaseAuth:
         return (
             f"host={self.host} port={self.port} dbname={self.database} "
             f"user={self.user} password={self.password()} "
-            f"sslmode=require connect_timeout={connect_timeout} "
+            f"sslmode={self.sslmode} connect_timeout={connect_timeout} "
             f"application_name={application_name} "
             # TCP keepalives: detect server-side connection drops in ~25s
             # instead of the OS default ~130s (tcp_retries2). Without these,
@@ -490,7 +513,7 @@ class LakebaseAuth:
             "dbname": self.database,
             "user": self.user,
             "password": self.password(),
-            "sslmode": "require",
+            "sslmode": self.sslmode,
             "connect_timeout": connect_timeout,
             "application_name": application_name,
             # See ``conninfo`` for the rationale on TCP keepalives.

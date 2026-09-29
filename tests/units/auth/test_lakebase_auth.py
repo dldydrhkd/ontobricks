@@ -51,6 +51,8 @@ def autoscaling_pg_env(monkeypatch):
     monkeypatch.setenv("PGUSER", _FAKE_PGUSER)  # pragma: allowlist secret  # ggignore
     monkeypatch.delenv("LAKEBASE_PROJECT", raising=False)
     monkeypatch.delenv("PGAPPNAME", raising=False)
+    monkeypatch.delenv("PGPASSWORD", raising=False)
+    monkeypatch.delenv("PGSSLMODE", raising=False)
 
 
 def _autoscaling_api_client(
@@ -357,3 +359,45 @@ class TestConnectionTuning:
         assert "keepalives_idle=10" in conninfo
         assert "keepalives_interval=5" in conninfo
         assert "keepalives_count=3" in conninfo
+
+    def test_sslmode_defaults_to_require(self, autoscaling_pg_env):
+        auth = LakebaseAuth()
+        fake_w = MagicMock()
+        fake_w.api_client = _autoscaling_api_client()
+        auth._w = fake_w
+
+        assert auth.kwargs()["sslmode"] == "require"
+
+
+class TestLocalPostgresMode:
+    """``PGPASSWORD`` switches to a plain local Postgres (dev only):
+    no JWT mint, no Postgres API walk, ``PGSSLMODE`` honoured.
+    """
+
+    @pytest.fixture
+    def local_pg_env(self, monkeypatch, autoscaling_pg_env):
+        monkeypatch.setenv("PGHOST", "127.0.0.1")
+        monkeypatch.setenv("PGPASSWORD", "local-dev-password-not-secret")  # pragma: allowlist secret
+        monkeypatch.setenv("PGSSLMODE", "disable")
+
+    @staticmethod
+    def _auth_without_api() -> LakebaseAuth:
+        auth = LakebaseAuth()
+        fake_w = MagicMock()
+        fake_w.api_client.do.side_effect = AssertionError(
+            "Local Postgres mode must not call the Databricks API"
+        )
+        auth._w = fake_w
+        return auth
+
+    def test_password_returns_pgpassword(self, local_pg_env):
+        assert self._auth_without_api().password() == "local-dev-password-not-secret"
+
+    def test_instance_name_is_empty(self, local_pg_env):
+        assert self._auth_without_api().instance_name == ""
+
+    def test_kwargs_honour_pgsslmode(self, local_pg_env):
+        assert self._auth_without_api().kwargs()["sslmode"] == "disable"
+
+    def test_conninfo_honours_pgsslmode(self, local_pg_env):
+        assert "sslmode=disable" in self._auth_without_api().conninfo()

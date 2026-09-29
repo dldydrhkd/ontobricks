@@ -2709,7 +2709,20 @@ class SettingsService:
         _session_mgr: SessionManager,
         _settings: Settings,
     ) -> Dict[str, Any]:
-        """List all Lakebase Autoscaling projects visible in the workspace."""
+        """List all Lakebase Autoscaling projects visible in the workspace.
+
+        Local Postgres mode (``PGPASSWORD`` set) has no Lakebase control
+        plane, so return an empty list without calling the Postgres API.
+        """
+        from back.core.databricks import get_lakebase_auth
+
+        if get_lakebase_auth().static_password:
+            return {
+                "success": True,
+                "projects": [],
+                "message": "Local Postgres mode (PGPASSWORD set) — "
+                "Lakebase projects are not used; PGHOST is the graph store.",
+            }
         try:
             from databricks.sdk import WorkspaceClient
 

@@ -1,0 +1,33 @@
+## Local Postgres support for the registry (no Lakebase yet)
+
+Context: A workspace without a Lakebase Autoscaling project (Postgres API
+returns 503) could not run OntoBricks locally, because LakebaseAuth always
+minted a Lakebase JWT as the Postgres password and hardcoded sslmode=require.
+Local development now works against a plain Docker Postgres by setting
+PGPASSWORD (and PGSSLMODE=disable). Databricks Apps never injects PGPASSWORD,
+so deployed apps keep the JWT path unchanged.
+
+Changes:
+
+1. src/back/core/databricks/lakebase/LakebaseAuth.py
+   Add `static_password` and `sslmode` properties. `password()` returns
+   PGPASSWORD verbatim when set; `instance_name` returns "" in that mode
+   (no Postgres API walk); `conninfo()` / `kwargs()` honour PGSSLMODE
+   (default "require"). BranchLakebaseAuth is unchanged.
+2. tests/units/auth/test_lakebase_auth.py
+   Clear PGPASSWORD/PGSSLMODE in the autoscaling fixture; add
+   TestLocalPostgresMode (password, instance_name, sslmode in kwargs and
+   conninfo, no Databricks API calls) and a default-sslmode test.
+3. .env.example
+   Document the local Docker Postgres setup and the Initialize step.
+
+Modified files:
+- .env.example
+- src/back/core/databricks/lakebase/LakebaseAuth.py
+- tests/units/auth/test_lakebase_auth.py
+
+Tests: uv run --frozen pytest -q -m "not scenario" → 5855 passed, 315 skipped,
+6 deselected, 32 warnings in 28.76s
+Manual: app started with PGHOST=127.0.0.1:5433 (postgres:16-alpine), registry
+initialized via POST /settings/registry/initialize (15 tables created),
+/health registry/lakebase checks OK.

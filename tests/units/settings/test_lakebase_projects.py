@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch
 from back.objects.domain.SettingsService import SettingsService
 
 
-def test_graph_engine_lakebase_projects_returns_all_pages():
+def test_graph_engine_lakebase_projects_returns_all_pages(monkeypatch):
+    monkeypatch.delenv("PGPASSWORD", raising=False)
+
     class FakeApi:
         def do(self, method, path, *, query=None):
             assert method == "GET"
@@ -44,3 +46,19 @@ def test_graph_engine_lakebase_projects_returns_all_pages():
         "first",
         "second",
     ]
+
+
+def test_graph_engine_lakebase_projects_skips_api_in_local_postgres_mode(monkeypatch):
+    monkeypatch.setenv("PGPASSWORD", "local-dev-password-not-secret")  # pragma: allowlist secret
+
+    with patch(
+        "databricks.sdk.WorkspaceClient",
+        side_effect=AssertionError("Local Postgres mode must not call the Postgres API"),
+    ):
+        result = SettingsService.graph_engine_lakebase_projects_result(
+            MagicMock(),
+            MagicMock(),
+        )
+
+    assert result["success"] is True
+    assert result["projects"] == []
